@@ -145,8 +145,22 @@ impl VirtualDom {
         !self.dirty_scopes.is_empty()
     }
 
+    /// Remove dirty task entries whose queues were emptied (e.g. by a task being cancelled before it was polled)
+    fn remove_empty_dirty_tasks(&mut self) {
+        let mut dirty_tasks = self.runtime.dirty_tasks.borrow_mut();
+        while let Some(entry) = dirty_tasks.first() {
+            if entry.tasks_queued.borrow().is_empty() {
+                dirty_tasks.pop_first();
+            } else {
+                break;
+            }
+        }
+    }
+
     /// Take the top task from the highest scope
     pub(crate) fn pop_task(&mut self) -> Option<Task> {
+        self.remove_empty_dirty_tasks();
+
         let mut dirty_tasks = self.runtime.dirty_tasks.borrow_mut();
         let tasks = dirty_tasks.first()?;
 
