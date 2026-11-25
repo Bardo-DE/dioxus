@@ -1,4 +1,4 @@
-use crate::{innerlude::MountId, nodes::VNode, VirtualDom, WriteMutations};
+use crate::{VirtualDom, WriteMutations, innerlude::MountId, nodes::VNode};
 
 /// State required for diffing operations.
 ///

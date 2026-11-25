@@ -6,7 +6,7 @@
 //! their nested fragment child mounts), so scanning them through the parent's old child
 //! vnodes paired an old template with a new mount and indexed slots that do not exist.
 use dioxus::prelude::*;
-use dioxus_core::{generation, ScopeId};
+use dioxus_core::{ScopeId, generation};
 use dioxus_renderer_oracle::RendererOracle;
 
 #[test]
