@@ -5,7 +5,7 @@ use crate::{
     diff::{
         CreatedVNode,
         attributes::{AttrDiffTarget, AttributeDiffScratch},
-        context::{DiffFrame, DiffState},
+        context::{DiffContext, DiffFrame, DiffState},
         placement::{ElementEdge, InsertionSite, insertion_site_at, insertion_site_for_slot},
         template::{DynamicAnchor, DynamicNodeSlot},
     },
@@ -77,22 +77,34 @@ impl<'a> DiffFrame<'a> {
         let new = self.new;
 
         let current_mount = self.mount;
-        let mut state = state.reborrow_for_mount(current_mount);
+        let mut outer = state.reborrow_for_mount(current_mount);
 
         // If the templates are different, we need to replace the entire template.
         // `Template` equality includes anchor node/attribute ranges, so two vnodes
         // with incompatible dynamic slot layouts compare unequal here and take the
         // full-replace path.
         if old.template() != new.template() {
-            let parent = state
+            let parent = outer
                 .dom
                 .mounted_render_parent(current_mount)
                 .map(|parent| parent.parent());
-            let created = old.replace_inner(current_mount, new, parent, &mut state, true);
+            let created = old.replace_inner(current_mount, new, parent, &mut outer, true);
             return created.mount;
         }
 
-        state.enter_context(current_mount, old, new);
+        // Push this frame onto the chain of in-flight same-template diffs. The chain lives on
+        // the stack (each frame borrows its parent), so every ancestor that is mid-diff stays
+        // reachable for placement, however deep the diff has recursed.
+        let outer_context = outer.context();
+        let frame_context = match outer_context.as_ref() {
+            Some(context) => context.enter(current_mount, old, new),
+            None => DiffContext::new(current_mount, old, new),
+        };
+        let mut state = DiffState::new_with_context(
+            &mut *outer.dom,
+            outer.to.as_deref_mut(),
+            Some(frame_context),
+        );
 
         // If the templates are the same, we don't need to do anything, except copy over the mount information
         if old == new {

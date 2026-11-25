@@ -1,4 +1,4 @@
-use crate::{VirtualDom, WriteMutations, innerlude::MountId, nodes::VNode};
+use crate::{innerlude::MountId, nodes::VNode, VirtualDom, WriteMutations};
 
 /// State required for diffing operations.
 ///
@@ -96,14 +96,6 @@ impl<'dom, 'ctx, 'writer, 'mutation> DiffState<'dom, 'ctx, 'writer, 'mutation> {
             .restore_mounted_dynamic_node_slot(mount, dyn_node_idx, new_slot);
         result
     }
-
-    pub(crate) fn enter_context(&mut self, mount: MountId, old: &'ctx VNode, new: &'ctx VNode) {
-        let context = self.context.map_or_else(
-            || DiffContext::new(mount, old, new),
-            |context| context.enter(mount, old, new),
-        );
-        self.context = Some(context);
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -119,16 +111,21 @@ impl<'a> DiffFrame<'a> {
     }
 }
 
-/// Diff-local view of the active vnode and its parent while children are being
-/// reconciled.
+/// Diff-local view of the active vnode and every ancestor frame that is still being reconciled.
 ///
 /// The committed mount table still points at the old vnode while a same-template frame is being
 /// diffed, so placement resolution needs these temporary old/new pairs to reason about slots inside
-/// the active vnode and sibling order in the active parent.
+/// the active vnode and sibling order in any mid-diff ancestor.
+///
+/// The frames form a stack-allocated chain (each frame borrows its parent), covering the whole
+/// path from the outermost active diff, across component boundaries, to the current frame.
+/// Invariant: a mid-diff mount must have a frame here. Looking it up in the committed mount view
+/// instead pairs its old vnode with mount slots that earlier siblings have already rewritten to
+/// the new layout, so scanning a sibling would index slots of a different template.
 #[derive(Clone, Copy)]
 pub(crate) struct DiffContext<'a> {
     current: DiffFrame<'a>,
-    parent: Option<DiffFrame<'a>>,
+    parent: Option<&'a DiffContext<'a>>,
 }
 
 impl<'a> DiffContext<'a> {
@@ -139,18 +136,25 @@ impl<'a> DiffContext<'a> {
         }
     }
 
-    pub(crate) fn enter(self, mount: MountId, old: &'a VNode, new: &'a VNode) -> Self {
+    pub(crate) fn enter(&'a self, mount: MountId, old: &'a VNode, new: &'a VNode) -> Self {
         Self {
             current: DiffFrame { mount, old, new },
-            parent: Some(self.current),
+            parent: Some(self),
         }
     }
 
+    /// The innermost in-flight frame for `mount`, if its diff is still active.
     pub(crate) fn for_mount(self, mount: MountId) -> Option<DiffFrame<'a>> {
         if self.current.mount == mount {
-            Some(self.current)
-        } else {
-            self.parent.filter(|frame| frame.mount == mount)
+            return Some(self.current);
         }
+        let mut next = self.parent;
+        while let Some(context) = next {
+            if context.current.mount == mount {
+                return Some(context.current);
+            }
+            next = context.parent;
+        }
+        None
     }
 }
